@@ -1,5 +1,5 @@
 ![alt text](./AllSeeingEyeLogo.png?raw=true)
-<section align = "center"><h2> 👁️ All Seeing Eye - A Functional Reactive Programming Library for Luau! 🚀 </h2></section>
+<section align = "center"><h3> 👁️ All Seeing Eye - A Functional Reactive Programming Library for Luau! 🚀 </h3></section>
 
 ## Why All Seeing Eye?
 ASE is your power house for all things Functional Reactive. If you've never heard
