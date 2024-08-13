@@ -7,28 +7,19 @@
     * Provide all the Observers you need!
     
   Implementations
-    * combineLatest
     * concat
-    * merge
     * startWith
     * withLatestFrom
     * iif
-    * from
-    * of
-    * fromEvent
     * catch
     * debounceTime
     * distinctUntilChanged
-    * filter
     * take
     * takeUntil
     * share
     * shareReplay
     * bufferTime
     * concatMap
-    * map
-    * mergeMap aka flatMap
-    * scan
     * switchMap
     * tap
 ]]
@@ -51,6 +42,24 @@ local CollectionService = game:GetService("CollectionService")
 
 --------------------------------------------------------------------------------
 --- Exported Functions
+--[[
+  Function : New
+  Purpose : Creates a new observable (This is the backbone of everything)
+  Parameters :
+    * OnSubscribe (Function) : The callback function to run upon subscription.
+  Returns :
+    * Observable : An Observable that can either be subscribed to or piped.
+  Example :
+    local function ObserveHumanoidDied(Humanoid)
+      return ASE.New(function(Fire)
+        local HumanoidDiedConnection = Humanoid.Died:Connect(Fire)
+        
+        return function()
+          HumanoidDiedConnection:Disconnect()
+        end
+      end)
+    end
+]]
 function ASE.New(OnSubscribe)    
   local function Subscribe(FireCallback, FailCallback, CompleteCallback)
     local CleanupCallback
@@ -70,7 +79,6 @@ function ASE.New(OnSubscribe)
         if CompleteCallback then
           CompleteCallback()
         end
-
         if CleanupCallback then
           CleanupCallback()
         end
@@ -88,6 +96,7 @@ function ASE.New(OnSubscribe)
     for _, Transformer in Transformers do
       Result = Transformer(Result)
     end
+    
     return Result
   end
 
@@ -138,73 +147,82 @@ function ASE.Scan(Accumulator, Seed)
   end
 end
 
---function ASE.MergeMap(Callback, ResultSelector)
---  return function(Source)
---    return ASE.New(function(Fire, Fail, Complete)
---      local pendingCount = 0
---      local topComplete = false
+function ASE.MergeMap(Callback, ResultSelector)
+  return function(Source)
+    return ASE.New(function(Fire, Fail, Complete)
+      local Pending = 0
+      local TopComplete = false
+      local OuterCleanupCallback
+      
+      OuterCleanupCallback = Source.Subscribe(
+        function(...)
+          local OuterValue = ...
+          local Observable = Callback(...)
+          local InnerCleanupCallback
+          
+          Pending += 1
 
---      maid:GiveTask(source:Subscribe(
---        function(...)
---          local outerValue = ...
+          InnerCleanupCallback = Observable.Subscribe(
+            function(...)
+              return if ResultSelector
+                then Fire(ResultSelector(OuterValue, ...))
+                else Fire(...)
+            end,
+            function(...)
+              Fail(...)
+            end,
+            function()
+              InnerCleanupCallback()
+              
+              Pending -= 1
+              
+              if Pending == 0 and TopComplete then
+                Complete()
+                OuterCleanupCallback()
+              end
+            end
+          )
+        end,
+        function(...)
+          Fail(...)
+          OuterCleanupCallback()
+        end,
+        function()
+          TopComplete = true
+          
+          if Pending == 0 then
+            Complete()
+            OuterCleanupCallback()
+          end
+        end
+      )
+    end)
+  end
+end
 
---          local observable = project(...)
---          assert(Observable.isObservable(observable), "Bad observable from project")
+function ASE.ObserveTimer(InitialDelay, Seconds)
+  return ASE.New(function(Fire)
+    local Thread = task.spawn(function()
+      if InitialDelay and InitialDelay > 0 then
+        task.wait(InitialDelay)
+      end
 
---          pendingCount = pendingCount + 1
+      while true do
+        Fire()
+        
+        task.wait(Seconds)
+      end
+    end)
 
---          local innerMaid = Maid.new()
+    return function()
+      task.cancel(Thread)
+    end
+  end)
+end
 
---          local subscription = innerMaid:Add(observable:Subscribe(
---            function(...)
---              -- Merge each inner observable
---              if resultSelector then
---                sub:Fire(resultSelector(outerValue, ...))
---              else
---                sub:Fire(...)
---              end
---            end,
---            function(...)
---              sub:Fail(...)
---            end, -- Emit failure automatically
---            function()
---              innerMaid:DoCleaning()
---              pendingCount = pendingCount - 1
---              if pendingCount == 0 and topComplete then
---                sub:Complete()
---                maid:DoCleaning()
---              end
---            end))
-
---          if subscription:IsPending() then
---            local key = maid:GiveTask(innerMaid)
-
---            -- Cleanup
---            innerMaid:GiveTask(function()
---              maid[key] = nil
---            end)
---          else
---            subscription:Destroy()
---          end
---        end,
---        function(...)
---          sub:Fail(...) -- Also reflect failures up to the top!
---          maid:DoCleaning()
---        end,
---        function()
---          topComplete = true
---          if pendingCount == 0 then
---            sub:Complete()
---            maid:DoCleaning()
---          end
---        end))
-
---      return function()
---        --- Cleanup
---      end
---    end)
---  end
---end
+function ASE.ObserveInterval(Seconds)
+  return ASE.ObserveTimer(0, Seconds)
+end
 
 function ASE.Observe(...)
   local Arguments = if type(...) ~= "table" then {...} else ...
@@ -219,55 +237,46 @@ function ASE.Observe(...)
 end
 
 function ASE.ObserveCombinedLatest(Observables)
-  local initialPending = 0
-  local defaultLatest = {}
-  
-  for key, value in pairs(Observables) do
-    initialPending = initialPending + 1
-    defaultLatest[key] = ""
-  end
-
   return ASE.New(function(Fire, Fail, Complete)
-    local pending = initialPending
-    local latest = table.clone(defaultLatest)
+    local Pending = 0
+    local Latest = {}
+    local CleanupCallbacks = {}
 
-    if pending == 0 then
-      Fire(latest)
-      Complete()
-      return
-    end
-
-    local function fireIfAllSet()
-      for _, value in pairs(latest) do
-        if value == "" then
-          return
-        end
-      end
+    for Key, Observable in Observables do
+      Pending += 1
+      Latest[Key] = ""
       
-      Fire(table.clone(latest))
-    end
+      table.insert(CleanupCallbacks, Observable.Subscribe(
+        function(Value)
+          Latest[Key] = Value
+          
+          for _, Value in Latest do
+            if Value == "" then
+              return
+            end
+          end
 
-    for key, observer in pairs(Observables) do
-      observer.Subscribe(
-        function(value)
-          latest[key] = value
-          fireIfAllSet()
+          Fire(table.clone(Latest))
         end,
         function(...)
-          pending = pending - 1
+          Pending -= 1
+          
           Fail(...)
         end,
         function()
-          pending = pending - 1
-          if pending == 0 then
+          Pending -= 1
+          
+          if Pending == 0 then
             Complete()
           end
-        end
+        end)
       )
     end
 
     return function()
-      
+      for _, CleanupCallback in CleanupCallbacks do
+        CleanupCallback()
+      end
     end
   end)
 end
@@ -368,9 +377,7 @@ ASE.ObserveRenderStepped = if RunService:IsClient()
     return ASE.New(function(Fire)
       local RenderSteppedConnection
       
-      RenderSteppedConnection = RunService.RenderStepped:Connect(function(...)
-        Fire(...)
-      end)
+      RenderSteppedConnection = RunService.RenderStepped:Connect(Fire)
       
       return function()
         RenderSteppedConnection:Disconnect()
@@ -383,9 +390,7 @@ function ASE.ObserveHeartbeat()
   return ASE.New(function(Fire)
     local HearbeatConnection
     
-    HearbeatConnection = RunService.Heartbeat:Connect(function(...)
-      Fire(...)
-    end)
+    HearbeatConnection = RunService.Heartbeat:Connect(Fire)
 
     return function()
       HearbeatConnection:Disconnect()
