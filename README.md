@@ -1,5 +1,5 @@
 ![alt text](./AllSeeingEyeLogo.png?raw=true)
-<br>
+<br />
 <section align = "center"><h3> 👁️ All Seeing Eye - A Functional Reactive Programming Library for Luau! 🚀 </h3></section>
 
 ## Why All Seeing Eye?
